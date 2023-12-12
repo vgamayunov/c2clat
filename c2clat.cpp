@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <numa.h>
 
 #include <atomic>
 #include <chrono>
@@ -96,15 +97,24 @@ int main(int argc, char *argv[]) {
   }
 
   std::map<std::pair<int, int>, std::chrono::nanoseconds> data;
+  
+  // Set the strict flag to 1 to enforce the allocation on the specified NUMA node
+  numa_set_strict(1);
+  // Set allocation policy to local allocation
+  numa_set_localalloc();
 
   for (size_t i = 0; i < cpus.size(); ++i) {
     for (size_t j = i + 1; j < cpus.size(); ++j) {
 
-      alignas(64) std::atomic<int> seq1 = {-1};
-      alignas(64) std::atomic<int> seq2 = {-1};
+      // alignas(64) std::atomic<int> seq1 = {-1};
+      // alignas(64) std::atomic<int> seq2 = {-1};
+      alignas(64) std::atomic<int> *seq1;
+      alignas(64) std::atomic<int> *seq2;
 
       auto t = std::thread([&] {
         pinThread(cpus[i]);
+
+        seq1 = new std::atomic<int>(-1);
 
         if (preheat) {
           auto init = std::chrono::steady_clock::now();
@@ -118,27 +128,30 @@ int main(int argc, char *argv[]) {
         for (int m = 0; m < nsamples; ++m) {
           if (!use_write) {
             for (int n = 0; n < 100; ++n) {
-              while (seq1.load(std::memory_order_acquire) != n)
+              while (seq1->load(std::memory_order_acquire) != n)
                 ;
-              seq2.store(n, std::memory_order_release);
+              seq2->store(n, std::memory_order_release);
             }
           } else {
-            while (seq2.load(std::memory_order_acquire) != 0)
+            while (seq2->load(std::memory_order_acquire) != 0)
               ;
-            seq2.store(1, std::memory_order_release);
+            seq2->store(1, std::memory_order_release);
             for (int n = 0; n < 100; ++n) {
               int cmp;
               do {
                 cmp = 2 * n;
-              } while (!seq1.compare_exchange_strong(cmp, cmp + 1));
+              } while (!seq1->compare_exchange_strong(cmp, cmp + 1));
             }
           }
         }
+        delete seq1;
       });
 
       std::chrono::nanoseconds rtt = std::chrono::nanoseconds::max();
 
       pinThread(cpus[j]);
+
+      seq2 = new std::atomic<int>(-1);
 
       if (preheat) {
         auto init = std::chrono::steady_clock::now();
@@ -150,35 +163,37 @@ int main(int argc, char *argv[]) {
       }
 
       for (int m = 0; m < nsamples; ++m) {
-        seq1 = seq2 = -1;
+        *seq1 = *seq2 = -1;
         if (!use_write) {
           auto ts1 = std::chrono::steady_clock::now();
           for (int n = 0; n < 100; ++n) {
-            seq1.store(n, std::memory_order_release);
-            while (seq2.load(std::memory_order_acquire) != n)
+            seq1->store(n, std::memory_order_release);
+            while (seq2->load(std::memory_order_acquire) != n)
               ;
           }
           auto ts2 = std::chrono::steady_clock::now();
           rtt = std::min(rtt, ts2 - ts1);
         } else {
           // wait for the other thread to be ready
-          seq2.store(0, std::memory_order_release);
-          while (seq2.load(std::memory_order_acquire) == 0)
+          seq2->store(0, std::memory_order_release);
+          while (seq2->load(std::memory_order_acquire) == 0)
             ;
-          seq2.store(-1, std::memory_order_release);
+          seq2->store(-1, std::memory_order_release);
           auto ts1 = std::chrono::steady_clock::now();
           for (int n = 0; n < 100; ++n) {
             int cmp;
             do {
               cmp = 2 * n - 1;
-            } while (!seq1.compare_exchange_strong(cmp, cmp + 1));
+            } while (!seq1->compare_exchange_strong(cmp, cmp + 1));
           }
           // wait for the other thread to see the last value
-          while (seq1.load(std::memory_order_acquire) != 199)
+          while (seq1->load(std::memory_order_acquire) != 199)
             ;
           auto ts2 = std::chrono::steady_clock::now();
           rtt = std::min(rtt, ts2 - ts1);
         }
+
+        delete seq2;
       }
 
       t.join();
