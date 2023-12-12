@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <numa.h>
 
 #include <atomic>
 #include <chrono>
@@ -98,23 +97,15 @@ int main(int argc, char *argv[]) {
 
   std::map<std::pair<int, int>, std::chrono::nanoseconds> data;
   
-  // Set the strict flag to 1 to enforce the allocation on the specified NUMA node
-  numa_set_strict(1);
-  // Set allocation policy to local allocation
-  numa_set_localalloc();
-
   for (size_t i = 0; i < cpus.size(); ++i) {
     for (size_t j = i + 1; j < cpus.size(); ++j) {
-
-      // alignas(64) std::atomic<int> seq1 = {-1};
-      // alignas(64) std::atomic<int> seq2 = {-1};
-      alignas(64) std::atomic<int> *seq1;
-      alignas(64) std::atomic<int> *seq2;
+      pinThread(cpus[i]);
+      alignas(64) std::atomic<int> *seq1 = new std::atomic<int>(-1);
+      pinThread(cpus[j]);
+      alignas(64) std::atomic<int> *seq2 = new std::atomic<int>(-1);
 
       auto t = std::thread([&] {
         pinThread(cpus[i]);
-
-        seq1 = new std::atomic<int>(-1);
 
         if (preheat) {
           auto init = std::chrono::steady_clock::now();
@@ -144,14 +135,11 @@ int main(int argc, char *argv[]) {
             }
           }
         }
-        delete seq1;
       });
 
       std::chrono::nanoseconds rtt = std::chrono::nanoseconds::max();
 
       pinThread(cpus[j]);
-
-      seq2 = new std::atomic<int>(-1);
 
       if (preheat) {
         auto init = std::chrono::steady_clock::now();
@@ -192,14 +180,14 @@ int main(int argc, char *argv[]) {
           auto ts2 = std::chrono::steady_clock::now();
           rtt = std::min(rtt, ts2 - ts1);
         }
-
-        delete seq2;
       }
 
       t.join();
 
       data[{i, j}] = rtt / 2 / 100;
       data[{j, i}] = rtt / 2 / 100;
+      delete seq1;
+      delete seq2;
     }
   }
 
