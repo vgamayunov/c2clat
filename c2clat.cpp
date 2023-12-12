@@ -190,7 +190,8 @@ int main(int argc, char *argv[]) {
       data[{i, j}] = rtt / 2 / 100;
       data[{j, i}] = rtt / 2 / 100;
       numa_free(seq1, sizeof(std::atomic<int>));
-      numa_free(seq2, sizeof(std::atomic<int>));    }
+      numa_free(seq2, sizeof(std::atomic<int>));    
+    }
   }
 
   if (plot) {
