@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <numa.h>
 
 #include <atomic>
 #include <chrono>
@@ -99,10 +100,12 @@ int main(int argc, char *argv[]) {
   
   for (size_t i = 0; i < cpus.size(); ++i) {
     for (size_t j = i + 1; j < cpus.size(); ++j) {
-      pinThread(cpus[i]);
-      alignas(64) std::atomic<int> *seq1 = new std::atomic<int>(-1);
-      pinThread(cpus[j]);
-      alignas(64) std::atomic<int> *seq2 = new std::atomic<int>(-1);
+      int node1 = numa_node_of_cpu(cpus[i]);
+      int node2 = numa_node_of_cpu(cpus[j]);
+      alignas(64) std::atomic<int>* seq1 = static_cast<std::atomic<int>*>(numa_alloc_onnode(sizeof(std::atomic<int>), node1));;
+      alignas(64) std::atomic<int>* seq2 = static_cast<std::atomic<int>*>(numa_alloc_onnode(sizeof(std::atomic<int>), node2));;
+      new (seq1) std::atomic<int>(-1);
+      new (seq2) std::atomic<int>(-1);
 
       auto t = std::thread([&] {
         pinThread(cpus[i]);
@@ -186,9 +189,8 @@ int main(int argc, char *argv[]) {
 
       data[{i, j}] = rtt / 2 / 100;
       data[{j, i}] = rtt / 2 / 100;
-      delete seq1;
-      delete seq2;
-    }
+      numa_free(seq1, sizeof(std::atomic<int>));
+      numa_free(seq2, sizeof(std::atomic<int>));    }
   }
 
   if (plot) {
